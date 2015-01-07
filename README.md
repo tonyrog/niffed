@@ -2,7 +2,7 @@ You been niffed
 ===============
 
 niffed is a wrapper to let you use the nif API inside an Erlang driver.
-Is may even be possible to load the same code as both a driver and
+It may even be possible to load the same code as both a driver and
 a nif at the same time.
 
 The nif calls are made through a simple dispatcher via the drivers
