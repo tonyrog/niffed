@@ -2,6 +2,7 @@
 #define __NIFFED_H__
 
 #include <stdlib.h>
+#include <stdint.h>
 
 #include "erl_driver.h"
 #include "erl_nif.h"
