@@ -25,7 +25,7 @@
 -define(_TAG_IMMED1_SMALL,      ((16#3 bsl ?_TAG_PRIMARY_SIZE) bor ?TAG_PRIMARY_IMMED1)).
 
 -define(_TAG_IMMED2_SIZE,      6).
--define(_TAG_IMMED2_MASK,      16#3F
+-define(_TAG_IMMED2_MASK,      16#3F).
 -define(_TAG_IMMED2_ATOM,      ((16#0 bsl ?_TAG_IMMED1_SIZE) bor ?_TAG_IMMED1_IMMED2)).
 -define(_TAG_IMMED2_CATCH,     ((16#1 bsl ?_TAG_IMMED1_SIZE) bor ?_TAG_IMMED1_IMMED2)).
 -define(_TAG_IMMED2_NIL,       ((16#3 bsl ?_TAG_IMMED1_SIZE) bor ?_TAG_IMMED1_IMMED2)).
@@ -105,6 +105,20 @@ encode(_L,W,X,Y) when is_integer(X) ->
 		     Bdata/binary>>,
 	    {Cell, Data}
     end;
+encode(_L,_W,X,_Y) when is_pid(X) ->
+    case pid_to_list(X) of
+	"<0."++PidStr ->
+	    {Num,".0>"} = string:to_integer(PidStr),
+	    Cell = (Num bsl ?_TAG_IMMED1_SIZE) bor ?_TAG_IMMED1_PID,
+	    {Cell, <<>>}
+    end;
+encode(_L,_W,X,_Y) when is_port(X) ->
+    case erlang:port_to_list(X) of
+	"#Port<0."++PortStr ->
+	    {Num,">"} = string:to_integer(PortStr),
+	    Cell = (Num bsl ?_TAG_IMMED1_SIZE) bor ?_TAG_IMMED1_PORT,
+	    {Cell, <<>>}
+    end;
 encode(_L,W,X,Y) when is_float(X) ->
     Cell = (?TAG_PRIMARY_BOXED bor (Y bsl 2)),
     Arity = (64 div W),  %% 2 for 32 bit and 1 for 64 bit
@@ -177,6 +191,146 @@ encode_elem(L,W,I, T, Y, Ws, Ds) ->
     X = element(I, T),
     {Ew,Ed} = encode(L,W,X,Y),
     encode_elem(L,W,I-1,T,Y+word_size(W,Ed),[<<Ew:W/native>>|Ws],[Ed|Ds]).
+
+%%
+%% Data returned is {[<mark>], object}
+%% the first list pointer will point to the last
+%% data (cell) in the object
+%%
+%%     +----------------+
+%% ->  | 2   | ARITYVAL |
+%%     +----------------+
+%%     |     |  LIST    |  -+
+%%     +----------------+   |
+%%     |     OBJ        |   |
+%%     +----------------+   |
+%%     | object data    |   |
+%%     |      ...       |   |
+%%     +----------------+   |
+%%                        <-+
+%% 
+
+decode(Data) when is_binary(Data) ->
+    Wb = erlang:system_info(wordsize),
+    decode(Data, Wb).
+
+decode(Data0, Wb) ->
+    V1={arityval,2}      = decode_word(Data0,0,Wb),
+    V2={list,PointerEnd} = decode_word(Data0,Wb,Wb),
+    Base = PointerEnd - byte_size(Data0),
+    io:format("sizeof(Data0) = ~w\n", [byte_size(Data0)]),
+    io:format("V1=~p\n", [V1]),
+    io:format("V2=~p\n", [V2]),
+    io:format("Base=~p\n", [Base]),
+    decode_elem(Data0,2*Wb,Base,Wb).
+
+decode_elem(Data0,Offs,Base,Wb) ->
+    D = decode_word(Data0,Offs,Wb),
+    case D of
+	{small,Int} -> Int;
+	{nil,_Val} -> [];
+	{atom,_Index} -> D; %% fixme decode atom
+	{pid,Num} -> 
+	    erlang:list_to_pid("<0."++integer_to_list(Num)++".0>");
+	{port,Num} ->
+	    PStr = integer_to_list(Num),
+	    Ports = lists:dropwhile(
+		      fun(P) ->
+			      "#Port"++Ps = erlang:port_to_list(P),
+			      case string:tokens(Ps, "<>.") of
+				  [PStr,_] -> false;
+				  _ -> true
+			      end
+		      end, erlang:ports()),
+	    hd(Ports);
+	{arityval,N} -> 
+	    list_to_tuple([decode_elem(Data0,Offs+I*Wb,Base,Wb) ||
+			      I <- lists:seq(1,N)]);
+	{'fun',_N} -> D;
+	{pos_big,Int} -> Int;
+	{neg_big,Int} -> Int;
+	{float,Float} -> Float;
+	{export,_N} -> D;
+	{ref,_N} -> D;
+	{refc_bin,_N} -> D;
+	{heap_bin,Bin} -> Bin;
+	{sub_bin,_N} -> D;
+	{external_pid,_N} -> D;
+	{extrenal_port,_N} -> D;
+	{external_ref,_N} -> D;
+	{bin_matchstate,_N} -> D;
+	{list,Pointer} ->
+	    Hd = Pointer-Base,
+	    [decode_elem(Data0,Hd,Base,Wb) |decode_elem(Data0,Hd+Wb,Base,Wb)];
+	{boxed,Pointer} -> decode_elem(Data0,Pointer-Base,Base,Wb)
+    end.
+
+decode_word(Data, Offset, Wb) ->
+    <<_:Offset/binary,Word:Wb/unit:8-native, Data1/binary>> = Data,
+    case Word band 16#3 of
+	?TAG_PRIMARY_HEADER ->
+	    case Word band 16#3f of
+		?_TAG_HEADER_ARITYVAL -> 
+		    {arityval,Word bsr 6};
+		?_TAG_HEADER_FUN ->
+		    {'fun',Word bsr 6};
+		?_TAG_HEADER_POS_BIG ->
+		    Size = (Word bsr 6)*Wb,
+		    <<Int:Size/little-unsigned-unit:8,_/binary>> = Data1,
+		    {pos_big,Int};
+		?_TAG_HEADER_NEG_BIG ->
+		    Size = (Word bsr 6)*Wb,
+		    <<Int:Size/little-unsigned-unit:8,_/binary>> = Data1,
+		    {neg_big,-Int};
+		?_TAG_HEADER_FLOAT ->
+		    Size = (Word bsr 6)*Wb,
+		    <<Float:Size/native-float-unit:8,_/binary>> = Data1,
+		    {float,Float};
+		?_TAG_HEADER_EXPORT -> 
+		    {export,Word bsr 6};
+		?_TAG_HEADER_REF -> 
+		    {ref,Word bsr 6};
+		?_TAG_HEADER_REFC_BIN -> 
+		    {refc_bin,Word bsr 6};
+		?_TAG_HEADER_HEAP_BIN -> 
+		    <<BinSize:Wb/native-unit:8,
+		      Bin:BinSize/binary,_/binary>> = Data1,
+		    {heap_bin,Bin};
+		?_TAG_HEADER_SUB_BIN -> 
+		    {sub_bin,Word bsr 6};
+		?_TAG_HEADER_EXTERNAL_PID -> 
+		    {external_pid,Word bsr 6};
+		?_TAG_HEADER_EXTERNAL_PORT ->
+		    {external_port,Word bsr 6};
+		?_TAG_HEADER_EXTERNAL_REF  ->
+		    {external_ref,Word bsr 6};
+		?_TAG_HEADER_BIN_MATCHSTATE ->
+		    {bin_matchstate,Word bsr 6}
+	    end;
+	?TAG_PRIMARY_LIST ->
+	    {list,Word band (bnot 3)};
+	?TAG_PRIMARY_BOXED ->
+	    {boxed,Word band (bnot 3)};
+	?TAG_PRIMARY_IMMED1 ->
+	    case Word band 16#f of
+		?_TAG_IMMED1_PID -> {pid,Word bsr 4};
+		?_TAG_IMMED1_PORT -> {port,Word bsr 4};
+		?_TAG_IMMED1_IMMED2 ->
+		    case Word band 16#3f of
+			?_TAG_IMMED2_ATOM -> {atom,Word bsr 6};
+			?_TAG_IMMED2_CATCH -> {'catch',Word};
+			?_TAG_IMMED2_NIL -> {nil,Word bsr 6}
+		    end;
+		?_TAG_IMMED1_SMALL ->
+		    Ws = 8*Wb,
+		    if (Word bsr (Ws-1)) band 1 =:= 1 -> %% negative
+			    Int = ((bnot Word) bsr 4) band ((1 bsl (Ws-4))-1),
+			    {small,-(Int + 1)};
+		       true ->
+			    {small,(Word bsr 4)}
+		    end
+	    end
+    end.
 
 
 bignum_digits(W,Num) when Num < 0 ->

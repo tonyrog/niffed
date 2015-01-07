@@ -138,20 +138,16 @@ static ErlDrvSSizeT niffed_test_ctl(ErlDrvData d,unsigned int cmd,char* buf,
 
     switch(cmd) {
     case CTL_LOOKUP_ATOM: {  // translate atom string
-	ErlDrvTermData am = niffed_atom(buf, len);
-	return ctl_reply(1, &am, sizeof(am), rbuf, rlen);
+	ErlDrvTermData value;
+	if (niffed_lookup_atom(buf, len, &value))
+	    return ctl_reply(1, &value, sizeof(value), rbuf, rlen);
+	return ctl_reply(0, "", 0, rbuf, rlen);	
     }
 
     case CTL_LOOKUP_NIF: {  // lookup function/arity return index
-	int i;
-	for (i = 0; i < dptr->nif->num_of_funcs; i++) {
-	    int n = strlen(dptr->nif->funcs[i].name);
-	    if ( (buf[0] == n) && 
-		 (memcmp(buf+1,dptr->nif->funcs[i].name,n) == 0)) {
-		ErlDrvTermData value = i;
-		return ctl_reply(1, &value, sizeof(value), rbuf, rlen);
-	    }
-	}
+	ErlDrvTermData value;
+	if (niffed_lookup_nif(buf+1,buf[0],buf[buf[0]+1],dptr->nif,&value))
+	    return ctl_reply(1, &value, sizeof(value), rbuf, rlen);
 	return ctl_reply(0, "", 0, rbuf, rlen);
     }	
 
@@ -184,13 +180,10 @@ static ErlDrvSSizeT niffed_test_ctl(ErlDrvData d,unsigned int cmd,char* buf,
 	printf("term: ");
 	niffed_print(dptr->env, term);
 	printf("\r\n");
-	// FIXME: dterm encode reply!
-	// If we new object size we could just do a 
-	// enif_make_copy on the reply and assume that the value
-	// is consective. then just offset pointers!
+
 	if (ptr != fixbuf)
 	    driver_free(ptr);
-	return ctl_reply(1, "", 0, rbuf, rlen);
+	return niffed_copy(dptr->env, term, rbuf, rlen);
     }
 
     default:
@@ -220,6 +213,8 @@ static ErlDrvData niffed_test_start(ErlDrvPort port, char* command)
     dptr->port = port;
     dptr->env  = enif_alloc_env();
     dptr->nif  = nif_init();
+
+    printf("nif_init returned %p\r\n", dptr->nif);
 
 #ifdef PORT_CONTROL_BINARY
     set_port_control_flags(port, PORT_CONTROL_FLAG_BINARY);

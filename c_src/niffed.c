@@ -15,6 +15,8 @@
 #define TAG_PRIMARY_BOXED       0x2
 #define TAG_PRIMARY_IMMED       0x3
 
+#define PORT_CONTROL_BINARY
+
 // scan "NIF" term data and offset all pointers
 
 intptr_t* niffed_offset(intptr_t* src, size_t n, int dstart,intptr_t* dst, size_t m)
@@ -98,8 +100,33 @@ void niffed_print(ErlNifEnv* env, ERL_NIF_TERM term)
 	enif_get_atom(env, term, string, sizeof(string), ERL_NIF_LATIN1);
 	printf("%s", string);  // fixme quote when needed
     }
+    else if (enif_is_pid(env, term)) {
+	ErlNifPid pterm;
+	if (enif_get_local_pid(env, term, &pterm)) {
+	    printf("<0.%lu.0>", pterm.pid>>4);
+	}
+	else {
+	    printf("<x.y.z>");
+	}
+    }
+    else if (enif_is_port(env, term)) {
+	printf("#Port<x.yt>");
+    }
     else if (enif_is_empty_list(env, term)) {
 	printf("[]");
+    }
+    else if (enif_is_binary(env, term)) {
+	ErlNifBinary bin;
+	int i;
+	enif_inspect_binary(env, term, &bin);
+	if (bin.size > 0) {
+	    printf("<<%d", bin.data[0]);
+	    for (i = 1; i<bin.size; i++)
+		printf(",%d", bin.data[i]);
+	    printf(">");
+	}
+	else
+	    printf("<<>>");
     }
     else if (enif_is_list(env, term)) {
 	ERL_NIF_TERM head,tail;
@@ -146,13 +173,101 @@ void niffed_print(ErlNifEnv* env, ERL_NIF_TERM term)
     }
 }
 
-ErlDrvTermData niffed_atom(char* name, int len)
+int niffed_lookup_atom(char* name, int len, ErlDrvTermData* value)
 {
     char string[256];
     if (len < 256) {
 	memcpy(string, name, len);
 	string[len] = '\0';
-	return driver_mk_atom(string);
+	*value = driver_mk_atom(string);
+	return 1;
     }
-    return driver_mk_atom("?");
+    return 0;
+}
+
+int niffed_lookup_nif(char* name, int len, int arity, 
+		      ErlNifEntry* nif, ErlDrvTermData* value)
+{
+    int i;
+    for (i = 0; i < nif->num_of_funcs; i++) {
+	int n;
+	if ((nif->funcs[i].arity == arity) &&
+	    ((n = strlen(nif->funcs[i].name)) == len) &&
+	    (memcmp(name,nif->funcs[i].name,n) == 0)) {
+	    *value = i;
+	    return 1;
+	}
+    }
+    return 0;
+}
+
+
+static ErlDrvSSizeT copy_reply(int rep, void* buf, ErlDrvSizeT len,
+			       char** rbuf, ErlDrvSizeT rsize)
+{
+    char* ptr;
+
+    if ((len+1) > rsize) {
+#ifdef PORT_CONTROL_BINARY
+	ErlDrvBinary* bin = driver_alloc_binary(len+1);
+	if (bin == NULL) 
+	    return -1;
+	ptr = bin->orig_bytes;	
+	*rbuf = (char*) bin;
+#else
+	if ((ptr = driver_alloc(len+1)) == NULL)
+	    return -1;
+	*rbuf = ptr;
+#endif
+    }
+    else
+	ptr = *rbuf;
+    *ptr++ = rep;
+    memcpy(ptr, buf, len);
+    return len+1;
+}
+//
+// Copy obj to control output
+//
+int niffed_copy(ErlNifEnv* env, ERL_NIF_TERM obj, char** rbuf, ErlDrvSizeT rsize)
+{
+    // test max 24 bit integer as special mark !
+    // create spcial copy object = {[<mark>],obj} 
+    ERL_NIF_TERM mark = enif_make_int(env, (int)((intptr_t) rbuf & 0xffffff));
+    ERL_NIF_TERM mark_list = enif_make_list1(env, mark);
+    ERL_NIF_TERM obj1 = enif_make_tuple2(env, mark_list, obj);
+    ERL_NIF_TERM copy;
+    ERL_NIF_TERM* ptr;
+    ERL_NIF_TERM* rptr;
+
+
+    copy = enif_make_copy(env, obj1);
+
+    // copy should look something like
+    //     +----------------+
+    // ->  | 2   | ARITYVAL |
+    //     +----------------+
+    //     |     |  LIST    |  -+
+    //     +----------------+   |
+    //     |     OBJ        |   |
+    //     +----------------+   |
+    //     | object data    |   |
+    //     |      ...       |   |
+    //     +----------------+   |
+    //     | <mark> |  INT  | <-+
+    //     +----------------+
+    //     |        |  NIL  |
+    //     +----------------+
+
+    // determine the size of the object
+    ptr = (ERL_NIF_TERM*) (copy & ~3);
+    rptr = ptr;
+// optimise a bit later on
+//    if (*ptr == obj) // object is constant
+//	return copy_reply(1, &obj, sizeof(obj), rbuf, rsize);
+    while(*ptr != mark)
+	ptr++;
+    // do not return last cell
+    printf("niffed_copy: %lu\r\n", ptr-rptr);
+    return copy_reply(1,rptr,sizeof(ERL_NIF_TERM)*(ptr-rptr),rbuf,rsize);
 }

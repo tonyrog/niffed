@@ -48,7 +48,13 @@ call(Mod, Func, Args) ->
 		[{_,Index}] ->
 		    Lookup = fun(A) when is_atom(A) -> encode_atom(Port,A) end,
 		    NifData = niffed_codec:encode_call(Lookup, Index, Args),
-		    erlang:port_control(Port, ?CTL_CALL, NifData);
+		    case erlang:port_control(Port, ?CTL_CALL, NifData) of
+			<<0,_/binary>> ->
+			    exit(badarg);
+			<<1,Data/binary>> ->
+			    io:format("reply = ~p\n", [Data]),
+			    niffed_codec:decode(Data)
+		    end;
 		_ -> exit(undef)
 	    end;
 	_ ->  exit(undef)

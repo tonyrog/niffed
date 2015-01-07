@@ -7,14 +7,29 @@
 
 #include "erl_nif.h"
 
+static ERL_NIF_TERM info(ErlNifEnv* env,int argc,const ERL_NIF_TERM argv[]);
 static ERL_NIF_TERM hello(ErlNifEnv* env,int argc,const ERL_NIF_TERM argv[]);
 static ERL_NIF_TERM goodbye(ErlNifEnv* env,int argc,const ERL_NIF_TERM argv[]);
+static ERL_NIF_TERM echo(ErlNifEnv* env,int argc,const ERL_NIF_TERM argv[]);
+static ERL_NIF_TERM reverse(ErlNifEnv* env,int argc,const ERL_NIF_TERM argv[]);
 
 ErlNifFunc niffed_test_funcs[] = {
+    { "info",    0, info    },
     { "hello",   1, hello   },
     { "goodbye", 1, goodbye },
-    { "hello",   2, hello   }
+    { "hello",   2, hello   },
+    { "echo",    1, echo    },
+    { "reverse", 1, reverse }
 };
+
+static ERL_NIF_TERM info(ErlNifEnv* env,int argc,const ERL_NIF_TERM argv[])
+{
+    printf("info: niffed_test_funcs=%p\r\n", niffed_test_funcs);
+    printf("info: info=%p\r\n", niffed_test_funcs[0].fptr);
+    printf("info: env=%p\r\n", env);
+    return enif_make_int(env, 0);
+}
+
 
 static ERL_NIF_TERM hello(ErlNifEnv* env,int argc,const ERL_NIF_TERM argv[])
 {
@@ -53,6 +68,32 @@ static ERL_NIF_TERM goodbye(ErlNifEnv* env,int argc,const ERL_NIF_TERM argv[])
     }
     return enif_make_badarg(env);
 }
+
+static ERL_NIF_TERM echo(ErlNifEnv* env,int argc,const ERL_NIF_TERM argv[])
+{
+    return argv[0];
+}
+
+static ERL_NIF_TERM make_nil(ErlNifEnv* env)
+{
+    return enif_make_list(env, 0);
+}
+
+static ERL_NIF_TERM reverse(ErlNifEnv* env,int argc,const ERL_NIF_TERM argv[])
+{
+    ERL_NIF_TERM list = argv[0];
+    ERL_NIF_TERM res = make_nil(env);
+    ERL_NIF_TERM hd, tl;
+
+    while(enif_get_list_cell(env, list, &hd, &tl)) {
+	res = enif_make_list_cell(env, hd, res);
+	list = tl;
+    }
+    if (enif_is_empty_list(env, list))
+	return res;
+    return enif_make_badarg(env);
+}
+
 
 ERL_NIF_INIT(niffed_test, niffed_test_funcs, 
              0, 0, 0, 0)

@@ -1,8 +1,12 @@
 -module(niffed_test).
 
 %% -on_load(init/0).
--export([init/0]).
--export([hello/1, hello/2, goodbye/1]).
+-export([load_nif/0, load_niffed/0]).
+-export([info/0, hello/1, hello/2, goodbye/1]).
+-export([echo/1,reverse/1]).
+
+info() ->
+    niffed:call(?MODULE, info, []).
 
 hello(X) ->
     niffed:call(?MODULE, hello, [X]).
@@ -13,9 +17,21 @@ hello(X,Y) ->
 goodbye(L) ->
     niffed:call(?MODULE, goodbye, [L]).
 
-init() ->
+echo(Term) ->
+    niffed:call(?MODULE, echo, [Term]).
+
+reverse(List) ->
+    niffed:call(?MODULE, reverse, [List]).
+
+load_nif() ->
+    Nif = filename:join([code:priv_dir(niffed), ?MODULE]),
+    erlang:load_nif(Nif, 0).
+
+load_niffed() ->
     Lib = filename:join([code:priv_dir(niffed), ?MODULE]),
     niffed:load(Lib),
-    niffed:register(?MODULE, hello, 1),
-    niffed:register(?MODULE, hello, 2),
-    niffed:register(?MODULE, goodbye, 1).
+    [niffed:register(?MODULE, Function, Arity) ||
+	{Function,Arity} <- module_info(exports), 
+	Function =/= load_nif,
+	Function =/= load_niffed,
+	Function =/= module_info ].
