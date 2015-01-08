@@ -106,19 +106,11 @@ encode(_L,W,X,Y) when is_integer(X) ->
 	    {Cell, Data}
     end;
 encode(_L,_W,X,_Y) when is_pid(X) ->
-    case pid_to_list(X) of
-	"<0."++PidStr ->
-	    {Num,".0>"} = string:to_integer(PidStr),
-	    Cell = (Num bsl ?_TAG_IMMED1_SIZE) bor ?_TAG_IMMED1_PID,
-	    {Cell, <<>>}
-    end;
+    encode_pid(X);
 encode(_L,_W,X,_Y) when is_port(X) ->
-    case erlang:port_to_list(X) of
-	"#Port<0."++PortStr ->
-	    {Num,">"} = string:to_integer(PortStr),
-	    Cell = (Num bsl ?_TAG_IMMED1_SIZE) bor ?_TAG_IMMED1_PORT,
-	    {Cell, <<>>}
-    end;
+    encode_port(X);
+encode(_L,W,X,Y) when is_reference(X) ->
+    encode_ref(W,X,Y);
 encode(_L,W,X,Y) when is_float(X) ->
     Cell = (?TAG_PRIMARY_BOXED bor (Y bsl 2)),
     Arity = (64 div W),  %% 2 for 32 bit and 1 for 64 bit
@@ -251,7 +243,7 @@ decode_elem(Data0,Offs,Base,Wb) ->
 	{neg_big,Int} -> Int;
 	{float,Float} -> Float;
 	{export,_N} -> D;
-	{ref,_N} -> D;
+	{ref,Ref} -> decode_ref(Ref);
 	{refc_bin,_N} -> D;
 	{heap_bin,Bin} -> Bin;
 	{sub_bin,_N} -> D;
@@ -289,7 +281,9 @@ decode_word(Data, Offset, Wb) ->
 		?_TAG_HEADER_EXPORT -> 
 		    {export,Word bsr 6};
 		?_TAG_HEADER_REF -> 
-		    {ref,Word bsr 6};
+		    Size = (Word bsr 6)*Wb,
+		    <<Ref:Size/binary,_/binary>> = Data1,
+		    {ref,Ref};
 		?_TAG_HEADER_REFC_BIN -> 
 		    {refc_bin,Word bsr 6};
 		?_TAG_HEADER_HEAP_BIN -> 
@@ -351,3 +345,85 @@ word_size(32,Bin) ->
 word_size(64,Bin) ->
     (byte_size(Bin)+7) div 8.
 
+%% Helpers that cheat using external format
+-define(VERSION_MAGIC, 131).
+
+-define(SMALL_INTEGER_EXT,   $a).
+-define(INTEGER_EXT,         $b).
+-define(FLOAT_EXT,           $c).
+-define(ATOM_EXT,            $d).  %% 100
+-define(SMALL_ATOM_EXT,      $s).
+-define(REFERENCE_EXT,       $e).
+-define(NEW_REFERENCE_EXT,   $r).  %% 114
+-define(PORT_EXT,            $f).  %% 102
+-define(NEW_FLOAT_EXT,       $F).
+-define(PID_EXT,             $g).  %% 103
+-define(SMALL_TUPLE_EXT,     $h).
+-define(LARGE_TUPLE_EXT,     $i).
+-define(NIL_EXT,             $j).
+-define(STRING_EXT,          $k).
+-define(LIST_EXT,            $l).
+-define(BINARY_EXT,          $m).
+-define(BIT_BINARY_EXT,      $M).
+-define(SMALL_BIG_EXT,       $n).
+-define(LARGE_BIG_EXT,       $o).
+-define(NEW_FUN_EXT,         $p).
+-define(EXPORT_EXT,          $q).
+-define(FUN_EXT,             $u).
+-define(ATOM_UTF8_EXT,       $v).
+-define(SMALL_ATOM_UTF8_EXT, $w).
+-define(MAP_EXT,             $t).
+
+encode_port(Port) when is_port(Port) ->
+    <<?VERSION_MAGIC,
+      ?PORT_EXT,
+      ?ATOM_EXT,N:16,Node:N/binary,
+      ID:32, _Creation:8>> = term_to_binary(Port),
+    io:format("Port: Node=~s,Creation=~w,ID=~w, \n", [Node,_Creation,ID]),
+    Cell = (Node bsl ?_TAG_IMMED1_SIZE) bor ?_TAG_IMMED1_PORT,
+    {Cell, <<>>}.
+
+
+encode_pid(Pid) when is_pid(Pid) ->
+    <<?VERSION_MAGIC,
+      ?PID_EXT,
+      ?ATOM_EXT,N:16,Node:N/binary,
+      ID:32,Serial:32,_Creation:8>> = term_to_binary(Pid),
+    io:format("Pid: Node=~s,Creation=~w,ID=~w,Serial=~w \n", 
+	      [Node,_Creation,ID,Serial]),
+    Cell = (ID bsl ?_TAG_IMMED1_SIZE) bor ?_TAG_IMMED1_PID,
+    {Cell, <<>>}.
+
+encode_ref(W,Ref,Y) when is_reference(Ref) ->
+    <<?VERSION_MAGIC,
+      ?NEW_REFERENCE_EXT,
+      Len:16,
+      ?ATOM_EXT,N:16,Node:N/binary,
+      _Creation:8,ID:Len/unit:32-binary>> = term_to_binary(Ref),
+    io:format("Ref: Node=~s,Creation=~w,ID=~w, \n", [Node,_Creation,ID]),
+    Cell = (?TAG_PRIMARY_BOXED bor (Y bsl 2)),
+    Size = bit_size(ID),
+    Arity = (Size+W-1) div W,
+    Pad = Arity*W - Size,
+    Data = <<(?_TAG_HEADER_REF bor 
+		  (Arity bsl ?_HEADER_ARITY_OFFS)):W/native,
+	     0:Pad, ID/binary>>,
+    {Cell, Data}.
+
+decode_ref(<<0,0,0,0,Ref/binary>>) ->
+    decode_ref_(Ref);
+decode_ref(Ref) ->
+    decode_ref_(Ref).
+
+decode_ref_(Ref) ->
+    Node = atom_to_binary(node(), latin1),
+    N = byte_size(Node),
+    Len  = byte_size(Ref) div 4,
+    _Creation = 0,
+    Bin = <<?VERSION_MAGIC,
+	    ?NEW_REFERENCE_EXT,
+	    Len:16,
+	    ?ATOM_EXT,N:16,Node/binary,
+	    _Creation:8,Ref/binary>>,
+    io:format("binary = ~w\n", [Bin]),
+    binary_to_term(Bin).

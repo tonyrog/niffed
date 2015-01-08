@@ -11,6 +11,7 @@
 -behaviour(gen_server).
 
 %% API
+-export([start/0]).
 -export([start_link/0]).
 -export([load/1, register/3, call/3]).
 
@@ -33,6 +34,9 @@
 %%%===================================================================
 %%% API
 %%%===================================================================
+
+start() ->
+    application:start(niffed).
 
 load(Lib) ->
     gen_server:call(?SERVER, {load,Lib}).

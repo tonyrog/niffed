@@ -112,6 +112,9 @@ void niffed_print(ErlNifEnv* env, ERL_NIF_TERM term)
     else if (enif_is_port(env, term)) {
 	printf("#Port<x.yt>");
     }
+    else if (enif_is_ref(env, term)) {
+	printf("#Ref<a.b.c.d>");
+    }
     else if (enif_is_empty_list(env, term)) {
 	printf("[]");
     }
@@ -155,18 +158,6 @@ void niffed_print(ErlNifEnv* env, ERL_NIF_TERM term)
 		printf(",");
 	}
 	printf("}");
-    }
-    else if (enif_is_binary(env, term)) {  // note! not bitstring
-	int i;
-	ErlNifBinary bin;
-	enif_inspect_binary(env, term, &bin);
-	printf("<<");
-	for (i = 0; i < bin.size; i++) {
-	    printf("%d", bin.data[i]);
-	    if (i < bin.size-1)
-		printf(",");
-	}
-	printf(">>");
     }
     else {
 	printf("UNKNOWN: BITSTRING?");
