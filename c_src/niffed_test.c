@@ -180,10 +180,12 @@ static ErlDrvSSizeT niffed_test_ctl(ErlDrvData d,unsigned int cmd,char* buf,
 	printf("term: ");
 	niffed_print(dptr->env, term);
 	printf("\r\n");
-
 	if (ptr != fixbuf)
 	    driver_free(ptr);
-	return niffed_copy(dptr->env, term, rbuf, rlen);
+	if (term == 0)
+	    return ctl_reply(0, "", 0, rbuf, rlen);
+	else
+	    return niffed_copy(dptr->env, term, rbuf, rlen);
     }
 
     default:

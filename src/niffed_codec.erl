@@ -106,11 +106,11 @@ encode(_L,W,X,Y) when is_integer(X) ->
 	    {Cell, Data}
     end;
 encode(_L,_W,X,_Y) when is_pid(X) ->
-    encode_pid(X);
+    encode_local_pid(X);
 encode(_L,_W,X,_Y) when is_port(X) ->
-    encode_port(X);
+    encode_local_port(X);
 encode(_L,W,X,Y) when is_reference(X) ->
-    encode_ref(W,X,Y);
+    encode_local_ref(W,X,Y);
 encode(_L,W,X,Y) when is_float(X) ->
     Cell = (?TAG_PRIMARY_BOXED bor (Y bsl 2)),
     Arity = (64 div W),  %% 2 for 32 bit and 1 for 64 bit
@@ -222,19 +222,8 @@ decode_elem(Data0,Offs,Base,Wb) ->
 	{small,Int} -> Int;
 	{nil,_Val} -> [];
 	{atom,_Index} -> D; %% fixme decode atom
-	{pid,Num} -> 
-	    erlang:list_to_pid("<0."++integer_to_list(Num)++".0>");
-	{port,Num} ->
-	    PStr = integer_to_list(Num),
-	    Ports = lists:dropwhile(
-		      fun(P) ->
-			      "#Port"++Ps = erlang:port_to_list(P),
-			      case string:tokens(Ps, "<>.") of
-				  [PStr,_] -> false;
-				  _ -> true
-			      end
-		      end, erlang:ports()),
-	    hd(Ports);
+	{pid,Num} -> decode_local_pid(Num,Wb);
+	{port,Num} -> decode_local_port(Num, Wb);
 	{arityval,N} -> 
 	    list_to_tuple([decode_elem(Data0,Offs+I*Wb,Base,Wb) ||
 			      I <- lists:seq(1,N)]);
@@ -243,7 +232,7 @@ decode_elem(Data0,Offs,Base,Wb) ->
 	{neg_big,Int} -> Int;
 	{float,Float} -> Float;
 	{export,_N} -> D;
-	{ref,Ref} -> decode_ref(Ref);
+	{ref,Ref} -> decode_local_ref(Ref,Wb);
 	{refc_bin,_N} -> D;
 	{heap_bin,Bin} -> Bin;
 	{sub_bin,_N} -> D;
@@ -374,27 +363,46 @@ word_size(64,Bin) ->
 -define(SMALL_ATOM_UTF8_EXT, $w).
 -define(MAP_EXT,             $t).
 
-encode_port(Port) when is_port(Port) ->
+encode_local_port(Port) when is_port(Port) ->
     <<?VERSION_MAGIC,
       ?PORT_EXT,
       ?ATOM_EXT,N:16,Node:N/binary,
       ID:32, _Creation:8>> = term_to_binary(Port),
     io:format("Port: Node=~s,Creation=~w,ID=~w, \n", [Node,_Creation,ID]),
-    Cell = (Node bsl ?_TAG_IMMED1_SIZE) bor ?_TAG_IMMED1_PORT,
+    Cell = (ID bsl ?_TAG_IMMED1_SIZE) bor ?_TAG_IMMED1_PORT,
     {Cell, <<>>}.
 
+decode_local_port(Num, _Wb) ->
+    Node = atom_to_binary(node(), latin1),
+    N = byte_size(Node),
+    _Creation = 0,
+    Bin = <<?VERSION_MAGIC,?PORT_EXT,?ATOM_EXT,N:16,Node:N/binary,
+	    Num:32, _Creation:8>>,
+    binary_to_term(Bin).
 
-encode_pid(Pid) when is_pid(Pid) ->
+encode_local_pid(Pid) when is_pid(Pid) ->
     <<?VERSION_MAGIC,
       ?PID_EXT,
       ?ATOM_EXT,N:16,Node:N/binary,
-      ID:32,Serial:32,_Creation:8>> = term_to_binary(Pid),
-    io:format("Pid: Node=~s,Creation=~w,ID=~w,Serial=~w \n", 
-	      [Node,_Creation,ID,Serial]),
-    Cell = (ID bsl ?_TAG_IMMED1_SIZE) bor ?_TAG_IMMED1_PID,
+      Num:32,Serial:32,_Creation:8>> = term_to_binary(Pid),
+    io:format("Pid: Node=~s,Creation=~w,Num=~w,Serial=~w \n", 
+	      [Node,_Creation,Num,Serial]),
+    Cell = (((Serial bsl 15) bor Num) bsl ?_TAG_IMMED1_SIZE) bor
+	?_TAG_IMMED1_PID,
     {Cell, <<>>}.
 
-encode_ref(W,Ref,Y) when is_reference(Ref) ->
+decode_local_pid(NumSer, _Wb) ->
+    Node = atom_to_binary(node(), latin1),
+    N = byte_size(Node),
+    Num = NumSer band 16#7fff,  %% 15 bit pid number
+    Serial = (NumSer bsr 15) band 16#1fff,  %% 13 bit pid serial
+    _Creation = 0,
+    Bin = <<?VERSION_MAGIC,?PID_EXT,?ATOM_EXT,N:16,Node:N/binary,
+	    Num:32,Serial:32,_Creation:8>>,
+    binary_to_term(Bin).
+
+
+encode_local_ref(W,Ref,Y) when is_reference(Ref) ->
     <<?VERSION_MAGIC,
       ?NEW_REFERENCE_EXT,
       Len:16,
@@ -410,12 +418,12 @@ encode_ref(W,Ref,Y) when is_reference(Ref) ->
 	     0:Pad, ID/binary>>,
     {Cell, Data}.
 
-decode_ref(<<0,0,0,0,Ref/binary>>) ->
-    decode_ref_(Ref);
-decode_ref(Ref) ->
-    decode_ref_(Ref).
+decode_local_ref(<<0,0,0,0,Ref/binary>>, 8) -> decode_local_ref_(Ref);
+decode_local_ref(Ref, 4) ->    decode_local_ref_(Ref);
+decode_local_ref(Ref, _Wb) ->  decode_local_ref_(Ref).
 
-decode_ref_(Ref) ->
+%% use external format to re-create the reference
+decode_local_ref_(Ref) ->
     Node = atom_to_binary(node(), latin1),
     N = byte_size(Node),
     Len  = byte_size(Ref) div 4,
