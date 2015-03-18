@@ -69,6 +69,11 @@
 
 -define(MASK_WORD(W),  ((1 bsl (W))-1)).
 
+%% -define(dbg(F), io:format(F)).
+%% -define(dbg(F,As), io:format(F, As)).
+-define(dbg(F), ok).
+-define(dbg(F,As), ok).
+
 encode_call(L,I,X) when is_integer(I), is_list(X) ->
     W = erlang:system_info(wordsize)*8,
     T = list_to_tuple(X),
@@ -207,13 +212,13 @@ decode(Data) when is_binary(Data) ->
     decode(Data, Wb).
 
 decode(Data0, Wb) ->
-    V1={arityval,2}      = decode_word(Data0,0,Wb),
-    V2={list,PointerEnd} = decode_word(Data0,Wb,Wb),
+    _V1={arityval,2}      = decode_word(Data0,0,Wb),
+    _V2={list,PointerEnd} = decode_word(Data0,Wb,Wb),
     Base = PointerEnd - byte_size(Data0),
-    io:format("sizeof(Data0) = ~w\n", [byte_size(Data0)]),
-    io:format("V1=~p\n", [V1]),
-    io:format("V2=~p\n", [V2]),
-    io:format("Base=~p\n", [Base]),
+    ?dbg("sizeof(Data0) = ~w\n", [byte_size(Data0)]),
+    ?dbg("V1=~p\n", [_V1]),
+    ?dbg("V2=~p\n", [_V2]),
+    ?dbg("Base=~p\n", [Base]),
     decode_elem(Data0,2*Wb,Base,Wb).
 
 decode_elem(Data0,Offs,Base,Wb) ->
@@ -366,9 +371,9 @@ word_size(64,Bin) ->
 encode_local_port(Port) when is_port(Port) ->
     <<?VERSION_MAGIC,
       ?PORT_EXT,
-      ?ATOM_EXT,N:16,Node:N/binary,
+      ?ATOM_EXT,N:16,_Node:N/binary,
       ID:32, _Creation:8>> = term_to_binary(Port),
-    io:format("Port: Node=~s,Creation=~w,ID=~w, \n", [Node,_Creation,ID]),
+    ?dbg("Port: Node=~s,Creation=~w,ID=~w, \n", [_Node,_Creation,ID]),
     Cell = (ID bsl ?_TAG_IMMED1_SIZE) bor ?_TAG_IMMED1_PORT,
     {Cell, <<>>}.
 
@@ -383,10 +388,10 @@ decode_local_port(Num, _Wb) ->
 encode_local_pid(Pid) when is_pid(Pid) ->
     <<?VERSION_MAGIC,
       ?PID_EXT,
-      ?ATOM_EXT,N:16,Node:N/binary,
+      ?ATOM_EXT,N:16,_Node:N/binary,
       Num:32,Serial:32,_Creation:8>> = term_to_binary(Pid),
-    io:format("Pid: Node=~s,Creation=~w,Num=~w,Serial=~w \n", 
-	      [Node,_Creation,Num,Serial]),
+    ?dbg("Pid: Node=~s,Creation=~w,Num=~w,Serial=~w \n", 
+	 [_Node,_Creation,Num,Serial]),
     Cell = (((Serial bsl 15) bor Num) bsl ?_TAG_IMMED1_SIZE) bor
 	?_TAG_IMMED1_PID,
     {Cell, <<>>}.
@@ -406,9 +411,9 @@ encode_local_ref(W,Ref,Y) when is_reference(Ref) ->
     <<?VERSION_MAGIC,
       ?NEW_REFERENCE_EXT,
       Len:16,
-      ?ATOM_EXT,N:16,Node:N/binary,
+      ?ATOM_EXT,N:16,_Node:N/binary,
       _Creation:8,ID:Len/unit:32-binary>> = term_to_binary(Ref),
-    io:format("Ref: Node=~s,Creation=~w,ID=~w, \n", [Node,_Creation,ID]),
+    ?dbg("Ref: Node=~s,Creation=~w,ID=~w, \n", [_Node,_Creation,ID]),
     Cell = (?TAG_PRIMARY_BOXED bor (Y bsl 2)),
     Size = bit_size(ID),
     Arity = (Size+W-1) div W,
@@ -433,5 +438,5 @@ decode_local_ref_(Ref) ->
 	    Len:16,
 	    ?ATOM_EXT,N:16,Node/binary,
 	    _Creation:8,Ref/binary>>,
-    io:format("binary = ~w\n", [Bin]),
+    ?dbg("binary = ~w\n", [Bin]),
     binary_to_term(Bin).
